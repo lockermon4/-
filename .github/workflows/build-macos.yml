@@ -33,21 +33,28 @@ jobs:
           python -m pip install -r requirements.txt
           QT_QPA_PLATFORM=offscreen python check_sim.py
 
-      - name: Build Flake.app
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Build Flake.app and DMG
         run: ./build.sh
 
       - name: Rename archive and checksum
         run: |
           cd dist
           mv Flake-macOS.zip "Flake-macOS-${{ matrix.arch }}.zip"
-          shasum -a 256 "Flake-macOS-${{ matrix.arch }}.zip" > "Flake-macOS-${{ matrix.arch }}.zip.sha256"
+          mv Flake.dmg "Flake-macOS-${{ matrix.arch }}.dmg"
+          for f in "Flake-macOS-${{ matrix.arch }}.zip" "Flake-macOS-${{ matrix.arch }}.dmg"; do
+            shasum -a 256 "$f" > "$f.sha256"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
           name: Flake-macOS-${{ matrix.arch }}
           path: |
             dist/Flake-macOS-${{ matrix.arch }}.zip
-            dist/Flake-macOS-${{ matrix.arch }}.zip.sha256
+            dist/Flake-macOS-${{ matrix.arch }}.dmg
+            dist/Flake-macOS-${{ matrix.arch }}.*.sha256
 
   release:
     # Права на запись — только этой задаче и только для тегов v*.
@@ -69,10 +76,11 @@ jobs:
           body: |
             Снег на рабочем столе Mac.
 
-            - **Flake-macOS-arm64.zip** — Apple Silicon (M1–M4)
-            - **Flake-macOS-x86_64.zip** — Intel
+            - **Flake-macOS-arm64.dmg** — Apple Silicon (M1–M4)
+            - **Flake-macOS-x86_64.dmg** — Intel
+            - то же в zip — если DMG не нужен
 
-            Распакуйте и перетащите Flake.app в «Программы». Приложение не подписано
+            Откройте DMG и перетащите Flake в «Программы». Приложение не подписано
             сертификатом Apple: при первом запуске — правый клик → «Открыть».
             Если macOS пишет «повреждено»: `xattr -dr com.apple.quarantine /Applications/Flake.app`.
 

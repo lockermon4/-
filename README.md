@@ -11,8 +11,9 @@ macOS — со всеми его добавками: паровозиком, м�
 
 Готовые сборки делает GitHub Actions (workflow **Build macOS app**):
 
-- `Flake-macOS-arm64.zip` — для Mac на Apple Silicon (M1–M4);
-- `Flake-macOS-x86_64.zip` — для Mac на Intel.
+- `Flake-macOS-arm64.dmg` — для Mac на Apple Silicon (M1–M4);
+- `Flake-macOS-x86_64.dmg` — для Mac на Intel;
+- то же самое в `.zip` — если установщик не нужен.
 
 Их можно взять во вкладке **Actions** → последний запуск → **Artifacts**,
 а при пуше тега `v*` (например, `v1.0.0`) они автоматически прикрепляются к
@@ -20,7 +21,8 @@ macOS — со всеми его добавками: паровозиком, м�
 
 ## Установка
 
-1. Распакуйте zip и перетащите **Flake.app** в «Программы» (`/Applications`).
+1. Откройте `.dmg` и перетащите **Flake** на папку «Программы» (или распакуйте
+   zip и перенесите Flake.app в `/Applications`).
 2. Приложение не подписано сертификатом Apple, поэтому при первом запуске:
    правый клик по Flake.app → **Открыть** → **Открыть**.
    Если macOS пишет, что приложение «повреждено», выполните в Терминале:
@@ -90,8 +92,9 @@ macOS — со всеми его добавками: паровозиком, м�
 
 Скрипт создаст `.venv`, поставит зависимости (`PySide6-Essentials`, `numpy`,
 `pyobjc`, `pyinstaller`, `pillow`), сгенерирует иконку и соберёт
-`dist/Flake.app` и `dist/Flake-macOS.zip`. Сборка получается под архитектуру
-вашего Mac.
+`dist/Flake.app`, `dist/Flake-macOS.zip` и — если установлен
+[create-dmg](https://github.com/create-dmg/create-dmg) (`brew install create-dmg`) —
+установщик `dist/Flake.dmg`. Сборка получается под архитектуру вашего Mac.
 
 Запуск без сборки:
 
