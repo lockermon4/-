@@ -9,7 +9,7 @@ import math
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import (QBrush, QColor, QFont, QFontMetricsF, QImage,
+from PySide6.QtGui import (QRegion, QBrush, QColor, QFont, QFontMetricsF, QImage,
                            QLinearGradient, QPainter, QPainterPath, QPen,
                            QPolygonF, QRadialGradient)
 
@@ -349,7 +349,32 @@ class Renderer:
             if (surface.x > screen_rect.right() + 10
                     or surface.x + surface.width < screen_rect.left() - 10):
                 continue
-            self._draw_surface(p, surface, screen_rect)
+            clip = self._front_clip(sim, surface, screen_rect)
+            if clip is None:
+                self._draw_surface(p, surface, screen_rect)
+            elif not clip.isEmpty():
+                p.save()
+                p.setClipRegion(clip)
+                self._draw_surface(p, surface, screen_rect)
+                p.restore()
+
+    @staticmethod
+    def _front_clip(sim: Simulator, surface, screen_rect: QRectF):
+        """Область, где сугроб виден: экран минус окна, стоящие впереди.
+
+        None — ничего не закрывает (рисуем без обрезки, это дешевле).
+        """
+        fronts = getattr(sim.snapshot, "fronts", ())
+        if not fronts:
+            return None
+        band = QRectF(surface.x - 8, surface.top - 60, surface.width + 16, 64)
+        covering = [r for z, r in fronts if z < surface.z and r.intersects(band)]
+        if not covering:
+            return None
+        region = QRegion(screen_rect.toAlignedRect())
+        for r in covering:
+            region = region.subtracted(QRegion(r.toAlignedRect()))
+        return region
 
     @staticmethod
     def _blur(values: list[float], passes: int = 2) -> list[float]:

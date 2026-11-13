@@ -57,6 +57,9 @@ class Snapshot:
     blocked: list[QRectF] = field(default_factory=list)
     foreground: int = 0
     signature: tuple = ()
+    # Все окна (и развёрнутые тоже): (z, прямоугольник). Нужны, чтобы сугроб
+    # на окне позади другого окна не рисовался поверх переднего.
+    fronts: list[tuple[int, QRectF]] = field(default_factory=list)
 
 
 class WindowTracker:
@@ -191,7 +194,11 @@ class WindowTracker:
             (lg.id, round(lg.x, 1), round(lg.top, 1), round(lg.width, 1))
             for lg in ledges
         ))
-        return Snapshot(ledges, occluders, blocked, fg, signature)
+        fronts = [(z, QRectF(rect)) for _wid, z, rect, _top, _m in raw]
+        signature = signature + tuple(
+            (z, round(r.x()), round(r.y()), round(r.width()), round(r.height()))
+            for z, r in fronts)
+        return Snapshot(ledges, occluders, blocked, fg, signature, fronts)
 
     # ------------------------------------------------------------------ #
     def _covers_monitor(self, rect: QRectF, monitors, world: World) -> bool:

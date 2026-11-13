@@ -542,6 +542,12 @@ class Simulator:
                 surface.deposit_many(xs, am)
 
     def _is_topmost(self, ledge, x: float) -> bool:
+        # Кромку закрывает окно, стоящее впереди: снег туда не долетает.
+        y = ledge.top - 1.0
+        for z, rect in getattr(self.snapshot, "fronts", ()):
+            if (z < ledge.z and rect.left() <= x <= rect.right()
+                    and rect.top() <= y <= rect.bottom()):
+                return False
         for other in self.snapshot.ledges:
             if other.id == ledge.id:
                 continue
