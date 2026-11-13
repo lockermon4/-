@@ -12,7 +12,7 @@ echo "[2/5] Виртуальное окружение и зависимости.
 "$PY" -m venv .venv
 source .venv/bin/activate
 python -m pip install --quiet --disable-pip-version-check --upgrade pip
-python -m pip install --quiet --disable-pip-version-check -r requirements.txt pyinstaller pillow
+python -m pip install --quiet --disable-pip-version-check -r requirements.txt pyinstaller==6.22.3 pillow==13.0.0
 
 echo "[3/5] Иконка приложения..."
 python make_icon.py
