@@ -44,6 +44,9 @@ jobs:
       - name: Build Flake.app and DMG
         run: ./build.sh
 
+      - name: Smoke test on a real Mac
+        run: python packaging/ci_smoke.py dist/Flake.app/Contents/MacOS/Flake
+
       - name: Rename archive and checksum
         run: |
           cd dist

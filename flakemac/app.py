@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import fcntl
+import logging
 import os
 import plistlib
 import random
@@ -204,6 +205,10 @@ class FlakeApp:
         act = menu.addAction("Продолжить снег" if sim.paused else "Пауза")
         act.triggered.connect(self._toggle_pause)
 
+        sound_on = bool(self.settings["music_enabled"])
+        act = menu.addAction("🔊 Звук: вкл" if sound_on else "🔇 Звук: выкл")
+        act.triggered.connect(lambda: self._toggle_music(not bool(self.settings["music_enabled"])))
+
         menu.addSeparator()
 
         intensity_menu = menu.addMenu("Интенсивность")
@@ -367,9 +372,9 @@ class FlakeApp:
         if checked:
             # Сразу слышно, что мелодия включилась.
             self.engine.music.preview(3.0)
-            self._toast("Музыка под уборку включена")
+            self._toast("Звук включён")
         else:
-            self._toast("Музыка под уборку выключена")
+            self._toast("Звук выключен")
 
     def _set_music_volume(self, value: int) -> None:
         self.engine.set_music_volume(value)
@@ -496,10 +501,34 @@ class FlakeApp:
         )
 
     # ------------------------------------------------------------------ #
-    def run(self) -> int:
+    def run(self, diagnose: bool = False) -> int:
         self.engine.start()
         QTimer.singleShot(400, self._welcome)
+        if diagnose:
+            QTimer.singleShot(8000, self._diagnose)
         return self.app.exec()
+
+    def _diagnose(self) -> None:
+        """--diagnose: напечатать состояние окон снега и выйти (для CI и отладки)."""
+        import json
+
+        engine = self.engine
+        snapshot = engine.sim.snapshot
+        report = {
+            "pyobjc": macapi.AVAILABLE,
+            "screens": [[s.logical.x(), s.logical.y(), s.logical.width(),
+                         s.logical.height(), s.dpr] for s in engine.world.screens],
+            "overlays": [dict(macapi.describe_overlay(int(o.winId())),
+                              qtVisible=o.isVisible()) for o in engine.overlays],
+            "flakes": int(engine.sim.field.count),
+            "ledges": len(snapshot.ledges),
+            "dock": any(lg.is_taskbar for lg in snapshot.ledges),
+            "tray": self.tray.isVisible(),
+        }
+        text = json.dumps(report, ensure_ascii=False, indent=1)
+        print("FLAKE-DIAGNOSE " + text, flush=True)
+        logging.getLogger("flake").info("diagnose: %s", text)
+        self.quit()
 
     def _welcome(self) -> None:
         self._toast("Снег пошёл. Значок снежинки — в строке меню.")
@@ -523,7 +552,39 @@ def _acquire_single_instance():
         return None
 
 
+LOG_PATH = Path.home() / "Library" / "Logs" / "Flake" / "flake.log"
+
+
+def _setup_logging() -> None:
+    """Журнал ~/Library/Logs/Flake/flake.log: ошибки и падения видно в Console.app."""
+    import faulthandler
+    import logging.handlers
+
+    try:
+        LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.handlers.RotatingFileHandler(
+            LOG_PATH, maxBytes=512_000, backupCount=1, encoding="utf-8")
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+        root = logging.getLogger()
+        root.addHandler(handler)
+        root.addHandler(logging.StreamHandler())
+        root.setLevel(logging.INFO)
+        faulthandler.enable(open(LOG_PATH.with_suffix(".crash.log"), "a"))
+    except OSError:
+        return
+
+    def _hook(exc_type, exc, tb):
+        logging.getLogger("flake").critical("uncaught", exc_info=(exc_type, exc, tb))
+        sys.__excepthook__(exc_type, exc, tb)
+
+    sys.excepthook = _hook
+
+
 def main() -> int:
+    _setup_logging()
+    from . import __version__
+
+    logging.getLogger("flake").info("Flake %s start, pyobjc=%s", __version__, macapi.AVAILABLE)
     mutex = _acquire_single_instance()
     if mutex is None and "--allow-multi" not in sys.argv:
         app = QApplication.instance() or QApplication(sys.argv)
@@ -532,4 +593,4 @@ def main() -> int:
         return 0
 
     flake = FlakeApp()
-    return flake.run()
+    return flake.run(diagnose="--diagnose" in sys.argv)

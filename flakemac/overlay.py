@@ -26,7 +26,8 @@ class SnowOverlay(QWidget):
             None,
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
+            # Без Qt.Tool: на macOS он делает NSPanel, который прячется,
+            # пока приложение неактивно, — а Flake неактивен почти всегда.
             | Qt.WindowType.WindowTransparentForInput
             | Qt.WindowType.WindowDoesNotAcceptFocus,
         )

@@ -255,6 +255,12 @@ def configure_overlay(win_id: int, x: float, y: float, w: float, h: float) -> No
         window = _ns_window(win_id)
         if window is None:
             return
+        # Окно не должно прятаться, когда приложение неактивно: Flake живёт
+        # в строке меню и активным почти не бывает (NSPanel по умолчанию
+        # скрывается при деактивации — из-за этого снега не было видно).
+        if window.respondsToSelector_("setHidesOnDeactivate:"):
+            window.setHidesOnDeactivate_(False)
+        window.setCanHide_(False)
         window.setLevel_(OVERLAY_LEVEL)
         window.setCollectionBehavior_(_CB_ALL_SPACES | _CB_STATIONARY
                                       | _CB_IGNORES_CYCLE | _CB_FULLSCREEN_AUX)
@@ -264,8 +270,35 @@ def configure_overlay(win_id: int, x: float, y: float, w: float, h: float) -> No
         window.setBackgroundColor_(NSColor.clearColor())
         # Qt не даёт окну заходить под строку меню — ставим кадр напрямую.
         window.setFrame_display_(cocoa_rect(x, y, w, h), False)
+        window.orderFrontRegardless()
     except Exception:  # noqa: BLE001
-        pass
+        import logging
+
+        logging.getLogger("flake").exception("configure_overlay failed")
+
+
+def describe_overlay(win_id: int) -> dict:
+    """Состояние нативного окна — для режима диагностики."""
+    if not AVAILABLE:
+        return {"pyobjc": False}
+    try:
+        w = _ns_window(win_id)
+        if w is None:
+            return {"nswindow": None}
+        f = w.frame()
+        return {
+            "class": str(w.className()),
+            "visible": bool(w.isVisible()),
+            "onActiveSpace": bool(w.isOnActiveSpace()),
+            "occlusionVisible": bool(int(w.occlusionState()) & (1 << 1)),
+            "level": int(w.level()),
+            "alpha": float(w.alphaValue()),
+            "hidesOnDeactivate": bool(w.hidesOnDeactivate()),
+            "ignoresMouse": bool(w.ignoresMouseEvents()),
+            "frame": [f.origin.x, f.origin.y, f.size.width, f.size.height],
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {"error": repr(exc)}
 
 
 def hide_from_dock() -> None:
