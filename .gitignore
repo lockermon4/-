@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+
+# Сборка PyInstaller
+build/
+dist/
+flake.icns
+_icon_*.png
+
+# Рабочие артефакты
+/selftest*.png
+/*.log
+
+# OS
+.DS_Store
