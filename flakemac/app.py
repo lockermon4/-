@@ -74,6 +74,26 @@ def make_snowflake_icon(size: int = 64) -> QIcon:
     return QIcon(QPixmap.fromImage(make_snowflake_image(size)))
 
 
+def show_info(title: str, text: str) -> None:
+    """Информационное окно без NSAlert.
+
+    Нативный NSAlert (его по умолчанию вызывает QMessageBox на macOS) падает на
+    новых macOS при отрисовке системной иконки: «targetSizeInPoints.width>0».
+    Поэтому — собственное окно Qt со снежинкой вместо системной иконки.
+    """
+    from PySide6.QtWidgets import QMessageBox
+
+    macapi.activate_app()
+    box = QMessageBox()
+    box.setOption(QMessageBox.Option.DontUseNativeDialog, True)
+    box.setWindowTitle(title)
+    box.setText(text)
+    box.setIconPixmap(QPixmap.fromImage(make_snowflake_image(64)))
+    box.setStandardButtons(QMessageBox.StandardButton.Ok)
+    box.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+    box.exec()
+
+
 def make_menubar_icon() -> QIcon:
     """Монохромная снежинка-шаблон для строки меню: macOS сама
     перекрашивает её под светлую и тёмную тему."""
@@ -482,10 +502,8 @@ class FlakeApp:
             man.sign_text = text.strip()
 
     def _about(self) -> None:
-        from PySide6.QtWidgets import QMessageBox
-        macapi.activate_app()
-        QMessageBox.information(
-            None, "Flake для macOS",
+        show_info(
+            "Flake для macOS",
             "Flake — снег на рабочем столе.\n\n"
             "• Снег идёт поверх окон и копится сугробами на их верхних кромках\n"
             "• Проведите мышью по сугробу — останется борозда\n"
@@ -586,10 +604,10 @@ def main() -> int:
 
     logging.getLogger("flake").info("Flake %s start, pyobjc=%s", __version__, macapi.AVAILABLE)
     mutex = _acquire_single_instance()
-    if mutex is None and "--allow-multi" not in sys.argv:
+    if mutex is None and "--allow-multi" not in sys.argv and "--diagnose" not in sys.argv:
         app = QApplication.instance() or QApplication(sys.argv)
-        from PySide6.QtWidgets import QMessageBox
-        QMessageBox.information(None, "Flake", "Flake уже запущен — ищите снежинку в строке меню.")
+        logging.getLogger("flake").info("already running, exiting")
+        show_info("Flake", "Flake уже запущен — ищите снежинку в строке меню.")
         return 0
 
     flake = FlakeApp()
