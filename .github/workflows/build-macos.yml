@@ -6,6 +6,11 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Выпустить релиз с этим тегом (например, v1.0.0); пусто — только сборка"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -57,8 +62,8 @@ jobs:
             dist/Flake-macOS-${{ matrix.arch }}.*.sha256
 
   release:
-    # Права на запись — только этой задаче и только для тегов v*.
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Права на запись — только этой задаче: для тегов v* или ручного запуска с тегом.
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -72,7 +77,9 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          name: Flake для macOS ${{ github.ref_name }}
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          name: Flake для macOS ${{ inputs.release_tag || github.ref_name }}
           body: |
             Снег на рабочем столе Mac.
 
