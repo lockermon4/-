@@ -98,9 +98,16 @@ class OverlayEngine(QObject):
         self._last_mouse = (-10000.0, -10000.0)
         self._mouse_move_age = 0.0
 
+        self._active_interval = int(1000.0 / max(10, min(60, self._fps)))
+        self._idle_mode = False
+        # Пауза: последнее, что нарисовано, и когда (для статичного кадра).
+        self._static_key: tuple | None = None
+        self._last_paint = 0.0
+        self._left_up_at = -1e9
+
         self.timer = QTimer(self)
         self.timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self.timer.setInterval(int(1000.0 / max(10, min(60, self._fps))))
+        self.timer.setInterval(self._active_interval)
         self.timer.timeout.connect(self.tick)
 
         app = QGuiApplication.instance()
@@ -137,6 +144,8 @@ class OverlayEngine(QObject):
         self.overlays.clear()
 
     def rebuild(self) -> None:
+        self.tracker.invalidate_screens()
+        self.request_repaint()
         for overlay in self.overlays:
             overlay.hide()
             overlay.deleteLater()
@@ -159,6 +168,7 @@ class OverlayEngine(QObject):
     def set_paused(self, value: bool) -> None:
         self.settings["paused"] = value
         self.sim.paused = value
+        self.request_repaint()
 
     def set_mouse_enabled(self, value: bool) -> None:
         self.settings["mouse_enabled"] = value
@@ -177,12 +187,21 @@ class OverlayEngine(QObject):
         self.tracker.hide_maximized = bool(value)
         self.tracker._last_poll = 0.0
         self.tracker.snapshot(force=True)
+        self.request_repaint()
 
     def clear(self) -> None:
         self.sim.clear()
+        self.request_repaint()
 
     def melt(self) -> None:
         self.sim.clear()
+        self.request_repaint()
+
+    def request_repaint(self) -> None:
+        """Перерисовать на следующем тике, даже если кадр на паузе статичен."""
+        self._static_key = None
+        if self._idle_mode:
+            self._set_idle_mode(False)
 
     # ------------------------------------------------------------------ #
     def tick(self) -> None:
@@ -204,7 +223,12 @@ class OverlayEngine(QObject):
         dt = min(dt, 0.12)
 
         self._sample_pointer(now, dt)
-        self.sim.update(dt, active=self._mouse_move_age < 0.35)
+        # CGWindowList чаще опрашиваем только пока зажата левая кнопка
+        # (перетаскивание окна) и чуть-чуть после отпускания.
+        if self.sim.mouse_down:
+            self._left_up_at = now
+        dragging = (now - self._left_up_at) < 0.3
+        self.sim.update(dt, active=dragging)
 
         # Музыка едет вместе с паровозиком: выехал — появляется, уехал — стихает.
         if self.sim.train_runner.train is not None and not self.sim.paused:
@@ -213,8 +237,70 @@ class OverlayEngine(QObject):
             self.music.stop()
         self.music.update(dt)
 
+        if self.sim.paused:
+            # На паузе кадр обычно неподвижен: не перерисовываем экраны, пока
+            # ничего видимого не изменилось (страховка — раз в секунду).
+            key = self._visual_key()
+            moving = dragging or key != self._static_key
+            self._set_idle_mode(not moving)
+            if not moving and now - self._last_paint < 1.0:
+                return
+            self._static_key = key
+        else:
+            self._static_key = None
+            self._set_idle_mode(False)
+
+        self._last_paint = now
         for overlay in self.overlays:
             overlay.update()
+
+    # ------------------------------------------------------------------ #
+    def _set_idle_mode(self, idle: bool) -> None:
+        """Пауза и статичный кадр — редкий грубый таймер; иначе обычный."""
+        if idle == self._idle_mode:
+            return
+        self._idle_mode = idle
+        if idle:
+            self.timer.setTimerType(Qt.TimerType.CoarseTimer)
+            self.timer.setInterval(200)
+        else:
+            self.timer.setTimerType(Qt.TimerType.PreciseTimer)
+            self.timer.setInterval(self._active_interval)
+            # После долгого простоя dt не должен «прыгнуть».
+            self._last = time.perf_counter() - self._frame_time
+        if self.timer.isActive():
+            self.timer.start()  # тип таймера применяется при перезапуске
+
+    def _visual_key(self) -> tuple:
+        """Дешёвый отпечаток всего, что рисует Renderer (для паузы).
+
+        На паузе Simulator двигает только снежки и подстраивает сугробы под
+        окна; снежинки, снеговики и паровозик стоят. Отпечаток ловит и
+        изменения из меню (очистка, новый снеговик, табличка).
+        """
+        sim = self.sim
+        snap = sim.snapshot
+        surfaces = tuple(
+            (lid, s.x, s.top, s.width, s.h.size, float(s.h.sum()))
+            for lid, s in sim.surfaces.items()
+        )
+        balls = tuple((b.x, b.y, b.radius) for b in sim.balls)
+        men = tuple(
+            (id(m), m.x, m.y, m.crumble, m.sign_text, m.pose_head)
+            for m in sim.snowmen
+        )
+        train = sim.train_runner.train
+        train_key = None if train is None else (train.x, train.rail_y, len(train.puffs))
+        field = sim.field
+        field_key = (field.count,
+                     float(field.x[0]) if field.count else 0.0,
+                     float(field.y[-1]) if field.count else 0.0)
+        return (
+            snap.signature,
+            tuple((r.x(), r.y(), r.width(), r.height()) for r in snap.blocked),
+            tuple(lg.id for lg in snap.ledges if lg.can_accumulate),
+            surfaces, balls, men, train_key, field_key,
+        )
 
     def _sample_pointer(self, now: float, dt: float) -> None:
         px, py = macapi.cursor_pos()

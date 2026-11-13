@@ -65,21 +65,42 @@ class WindowTracker:
         self._snapshot = Snapshot()
         self._last_poll = 0.0
         self._last_fg = 0
+        # NSScreen меняется редко: кэшируем и обновляем не чаще раза в секунду
+        # (или сразу после invalidate_screens() по сигналу Qt).
+        self._screens: list = []
+        self._screens_at = -1e9
         self._own_pid = os.getpid()
         # True — снег прячется над развёрнутым окном (как в macOS-оригинале).
         self.hide_maximized = False
 
     # ------------------------------------------------------------------ #
+    # Частота опроса CGWindowList: ~5 Гц в покое, ~15 Гц пока зажата левая
+    # кнопка мыши (окно тащат — сугроб должен ехать вместе с ним).
+    IDLE_INTERVAL = 1.0 / 5.0
+    ACTIVE_INTERVAL = 1.0 / 15.0
+    SCREENS_TTL = 1.0
+
     def snapshot(self, force: bool = False, active: bool = False) -> Snapshot:
         now = time.perf_counter()
-        fg = macapi.frontmost_pid()
-        interval = 1.0 / 30.0 if active else 1.0 / 10.0
-        if not force and fg == self._last_fg and (now - self._last_poll) < interval:
+        interval = self.ACTIVE_INTERVAL if active else self.IDLE_INTERVAL
+        if not force and (now - self._last_poll) < interval:
             return self._snapshot
+        fg = macapi.frontmost_pid()
         self._last_fg = fg
         self._last_poll = now
         self._snapshot = self._poll(fg)
         return self._snapshot
+
+    def invalidate_screens(self) -> None:
+        """Сбросить кэш экранов (подключили/отключили монитор, сменилось разрешение)."""
+        self._screens_at = -1e9
+
+    def _monitors(self) -> list:
+        now = time.perf_counter()
+        if now - self._screens_at >= self.SCREENS_TTL:
+            self._screens = macapi.enum_screens()
+            self._screens_at = now
+        return self._screens
 
     # ------------------------------------------------------------------ #
     def _poll(self, fg: int) -> Snapshot:
@@ -88,7 +109,7 @@ class WindowTracker:
         occluders: list[Occluder] = []
         blocked: list[QRectF] = []
 
-        monitors = macapi.enum_screens()
+        monitors = self._monitors()
         windows = macapi.list_windows()
         raw: list[tuple] = []
 
@@ -155,7 +176,7 @@ class WindowTracker:
                                 is_taskbar=False, can_accumulate=can))
 
         # Dock — на его верхней кромке копится снег, по нему ездит паровозик.
-        bar = macapi.dock_rect(windows)
+        bar = macapi.dock_rect(windows, monitors)
         if bar:
             logical = world.rect_to_logical(*bar)
             if logical and logical.height() < logical.width() * 0.6:

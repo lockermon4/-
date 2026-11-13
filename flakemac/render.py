@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import (QBrush, QColor, QFont, QFontMetricsF, QImage,
                            QLinearGradient, QPainter, QPainterPath, QPen,
@@ -31,6 +32,9 @@ class SpriteCache:
 
     def flake(self, diameter: float, variant: int, dpr: float = 1.0) -> QImage:
         nearest = min(self.FLAKE_SIZES, key=lambda s: abs(s - diameter))
+        return self.flake_exact(nearest, variant, dpr)
+
+    def flake_exact(self, nearest: float, variant: int, dpr: float = 1.0) -> QImage:
         key = ("flake", nearest, variant, round(dpr, 2))
         img = self._cache.get(key)
         if img is None:
@@ -137,10 +141,17 @@ class SpriteCache:
 #  Рендерер
 # --------------------------------------------------------------------------- #
 
+_FLAKE_SIZES_NP = np.asarray(SpriteCache.FLAKE_SIZES, dtype=np.float64)
+
+
 class Renderer:
     def __init__(self) -> None:
         self.sprites = SpriteCache()
         self._dpr = 1.0
+        # Таблица спрайтов снежинок на dpr: [размер][вариант] + половины ширины.
+        self._flake_tables: dict[float, tuple[list, list]] = {}
+        # Кэш геометрии сугробов: ledge_id -> (ключ, данные для отрисовки).
+        self._drift_cache: dict[str, tuple] = {}
         self._snow_font = QFont("Segoe UI", 8)
         self._snow_font.setBold(True)
 
@@ -278,26 +289,55 @@ class Renderer:
         top = screen_rect.top() - 30
         bottom = screen_rect.bottom() + 30
 
-        xs = f.x.tolist()
-        ys = f.y.tolist()
-        sizes = f.size.tolist()
-        ops = f.opacity.tolist()
-        phases = f.phase.tolist()
+        x = f.x
+        y = f.y
+        visible = (x >= left) & (x <= right) & (y >= top) & (y <= bottom)
+        if not visible.any():
+            return
+        x = x[visible]
+        y = y[visible]
+        # Ближайший размер спрайта: argmin по |s - d| берёт первый минимум,
+        # ровно как min(FLAKE_SIZES, key=...) в SpriteCache.flake.
+        diam = f.size[visible].astype(np.float64) * 2.0
+        size_idx = np.abs(diam[:, None] - _FLAKE_SIZES_NP[None, :]).argmin(axis=1)
+        phase = f.phase[visible].astype(np.float64)
+        variant = (phase * 7.0).astype(np.int64) % 4
+        # int() в Python усекает к нулю, astype — тоже; % 4 у numpy, как у
+        # Python, неотрицательный.
+        sprite_idx = size_idx * 4 + variant
+        ops = np.clip(f.opacity[visible].astype(np.float64), 0.05, 1.0)
 
-        for x, y, size, op, ph in zip(xs, ys, sizes, ops, phases):
-            if x < left or x > right or y < top or y > bottom:
-                continue
-            variant = int(ph * 7.0) % 4
-            sprite = self.sprites.flake(size * 2.0, variant, dpr)
-            half = sprite.width() / (2.0 * dpr)
-            p.setOpacity(max(0.05, min(1.0, op)))
-            p.drawImage(QPointF(x - half, y - half), sprite)
+        sprites, halves = self._flake_table(dpr)
+        last_op = -1.0
+        set_opacity = p.setOpacity
+        draw_image = p.drawImage
+        for fx, fy, si, op in zip(x.tolist(), y.tolist(), sprite_idx.tolist(),
+                                  ops.tolist()):
+            if op != last_op:
+                set_opacity(op)
+                last_op = op
+            half = halves[si]
+            draw_image(QPointF(fx - half, fy - half), sprites[si])
         p.setOpacity(1.0)
+
+    def _flake_table(self, dpr: float) -> tuple[list, list]:
+        key = round(dpr, 2)
+        table = self._flake_tables.get(key)
+        if table is None:
+            sprites = [self.sprites.flake_exact(size, variant, dpr)
+                       for size in SpriteCache.FLAKE_SIZES for variant in range(4)]
+            halves = [img.width() / (2.0 * dpr) for img in sprites]
+            table = (sprites, halves)
+            self._flake_tables[key] = table
+        return table
 
     # ------------------------------------------------------------------ #
     def _draw_drifts(self, p: QPainter, sim: Simulator, dpr: float,
                      screen_rect: QRectF) -> None:
         active = sim.active_surface_ids()
+        if len(self._drift_cache) > len(sim.surfaces):
+            for lid in [k for k in self._drift_cache if k not in sim.surfaces]:
+                del self._drift_cache[lid]
         for lid, surface in sim.surfaces.items():
             if lid not in active:
                 continue
@@ -324,13 +364,46 @@ class Renderer:
         return out
 
     def _draw_surface(self, p: QPainter, surface, screen_rect: QRectF) -> None:
-        import numpy as np
+        # Геометрия сугроба меняется только вместе с картой высот или кромкой:
+        # пока они те же (пауза, тихий сугроб), путь берём из кэша.
+        h = surface.h
+        key = (surface.x, surface.top, surface.width, surface.cell, surface.corner)
+        cached = self._drift_cache.get(surface.ledge_id)
+        if (cached is not None and cached[0] == key
+                and cached[1].shape == h.shape and np.array_equal(cached[1], h)):
+            geom = cached[2]
+        else:
+            geom = self._surface_geometry(surface)
+            self._drift_cache[surface.ledge_id] = (key, h.copy(), geom)
+        if geom is None:
+            return
+        path, crest, grad, shadow_from, shadow_to = geom
 
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(grad))
+        p.drawPath(path)
+
+        # Тёплый блик по гребню.
+        pen = QPen(QColor(255, 255, 255, 205))
+        pen.setWidthF(1.1)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(crest)
+
+        # Мягкая тень под кромкой — снег лежит на окне, а не парит.
+        shadow = QPen(QColor(150, 176, 210, 60))
+        shadow.setWidthF(1.4)
+        p.setPen(shadow)
+        p.drawLine(shadow_from, shadow_to)
+
+    @staticmethod
+    def _surface_geometry(surface):
+        """Контур, гребень и градиент сугроба (или None, если рисовать нечего)."""
         h = surface.h
         cell = surface.cell
         n = h.size
         if n < 2:
-            return
+            return None
 
         corner = surface.corner
         base_y = surface.top
@@ -350,7 +423,7 @@ class Renderer:
 
         keep = (heights > 0.05) & (local >= 0.5) & (local <= surface.width - 0.5)
         if int(keep.sum()) < 2:
-            return
+            return None
 
         xs = surface.x + local[keep]
         hs = heights[keep]
@@ -366,7 +439,7 @@ class Renderer:
         xs_list = xs.tolist()
         hs_list = smoothed.tolist()
         if len(xs_list) < 2:
-            return
+            return None
 
         poly = QPolygonF()
         poly.append(QPointF(xs_list[0], base_y))
@@ -384,27 +457,15 @@ class Renderer:
         grad.setColorAt(0.0, QColor(255, 255, 255, 250))
         grad.setColorAt(0.55, QColor(246, 250, 255, 245))
         grad.setColorAt(1.0, QColor(214, 227, 247, 236))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QBrush(grad))
-        p.drawPath(path)
 
-        # Тёплый блик по гребню.
         crest = QPainterPath()
         crest.moveTo(xs_list[0], base_y - hs_list[0])
         for px, hh in zip(xs_list[1:], hs_list[1:]):
             crest.lineTo(px, base_y - hh)
-        pen = QPen(QColor(255, 255, 255, 205))
-        pen.setWidthF(1.1)
-        p.setPen(pen)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawPath(crest)
 
-        # Мягкая тень под кромкой — снег лежит на окне, а не парит.
-        shadow = QPen(QColor(150, 176, 210, 60))
-        shadow.setWidthF(1.4)
-        p.setPen(shadow)
-        p.drawLine(QPointF(xs_list[0], base_y + 0.8),
-                   QPointF(xs_list[-1], base_y + 0.8))
+        return (path, crest, grad,
+                QPointF(xs_list[0], base_y + 0.8),
+                QPointF(xs_list[-1], base_y + 0.8))
 
     # ------------------------------------------------------------------ #
     def _draw_balls(self, p: QPainter, sim: Simulator) -> None:

@@ -174,15 +174,18 @@ def enum_screens() -> list[ScreenRect]:
 #  Dock (аналог панели задач Windows)
 # --------------------------------------------------------------------------- #
 
-def dock_rect(windows: list[WinInfo] | None = None):
+def dock_rect(windows: list[WinInfo] | None = None,
+              screens: list[ScreenRect] | None = None):
     """Полоса Dock внизу экрана, если он видим и не прячется автоматически.
 
     Возвращает (x, top, right, bottom) в координатах Qt или None.
     Dock сбоку экрана не учитывается — на нём снегу лежать негде.
+    `windows` и `screens` можно передать уже полученными, чтобы не
+    опрашивать систему повторно.
     """
     if not AVAILABLE:
         return None
-    for scr in enum_screens():
+    for scr in screens if screens is not None else enum_screens():
         gap = scr.bottom - scr.visible_bottom
         if gap < 12:  # автоскрытие или Dock на другом экране/сбоку
             continue
